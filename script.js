@@ -39,7 +39,7 @@ function mapProductRow(row){
     id:String(row.id),
     title:row.title || '',
     category:row.category || fallback?.category || 'Handmade Decor',
-    subCategory:meta.subCategory || fallback?.subCategory || 'General',
+    subCategory:row.sub_category || meta.subCategory || fallback?.subCategory || 'General',
     price:Number(row.price) || 0,
     originalPrice:Number(row.original_price) || Number(row.price) || 0,
     rating:Number(row.rating) || fallback?.rating || 5,
@@ -47,11 +47,11 @@ function mapProductRow(row){
     artisanName:row.artisan_name || fallback?.artisanName || 'FolkMade Artisan',
     artisanRegion:row.artisan_region || fallback?.artisanRegion || 'India',
     image:row.image || fallback?.image || 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&q=80&w=600',
-    description:meta.description || fallback?.description || 'A handcrafted product from FolkMade.',
-    materials:meta.materials || fallback?.materials || 'Traditional materials',
-    inStock:meta.inStock ?? fallback?.inStock ?? 10,
-    isFeatured:meta.isFeatured ?? fallback?.isFeatured ?? false,
-    isBestseller:meta.isBestseller ?? fallback?.isBestseller ?? false
+    description:row.description || meta.description || fallback?.description || 'A handcrafted product from FolkMade.',
+    materials:row.materials || meta.materials || fallback?.materials || 'Traditional materials',
+    inStock:row.in_stock ?? meta.inStock ?? fallback?.inStock ?? 10,
+    isFeatured:row.is_featured ?? meta.isFeatured ?? fallback?.isFeatured ?? false,
+    isBestseller:row.is_bestseller ?? meta.isBestseller ?? fallback?.isBestseller ?? false
   };
 }
 
@@ -144,10 +144,8 @@ async function initFolkMade(){
       if(!currentUser) await supabaseClient.auth.signOut();
       else await loadWishlist();
     } else {
-      try{
-        const saved=JSON.parse(localStorage.getItem('folkmade_current_user')||'null');
-        currentUser=saved?.role==='admin' ? saved : null;
-      }catch(e){ currentUser=null; }
+      currentUser=null;
+      localStorage.removeItem('folkmade_current_user');
     }
     await loadProductsFromDatabase();
   }catch(e){
@@ -162,7 +160,8 @@ function money(n){return '₹'+Number(n).toLocaleString('en-IN')}
 function toast(msg){$('toast').textContent=msg;$('toast').classList.remove('hidden');setTimeout(()=>$('toast').classList.add('hidden'),2500)}
 function showView(v){state.view=v;render();window.scrollTo({top:0,behavior:'smooth'})}
 async function toggleAdmin(){
-  if(currentUser && currentUser.role==='admin'){ await loadAdminOrders(); showView('admin'); }
+  if(currentUser && String(currentUser.role||'').toLowerCase()==='admin'){ await loadAdminOrders(); showView('admin'); }
+  else if(currentUser && String(currentUser.role||'').toLowerCase()==='seller'){ showView('seller'); }
   else openAuth();
 }
 function clearSearch(){state.search='';$('searchInput').value='';renderShop()}
@@ -269,15 +268,7 @@ function showRegisterForm(){
 async function loginAccount(e){
   e.preventDefault();
   const role=$('login-role').value,email=$('login-email').value.trim().toLowerCase(),password=$('login-password').value;
-  if(role==='admin'){
-    if(email===ADMIN_ACCOUNT.email && password===ADMIN_ACCOUNT.password){
-      currentUser={...ADMIN_ACCOUNT};
-      localStorage.setItem('folkmade_current_user',JSON.stringify(currentUser));
-      await loadAdminOrders();
-      $('authModal').classList.add('hidden'); state.view='admin'; render(); toast('Welcome Admin!'); return;
-    }
-    $('login-error').innerHTML='<div class="auth-error">Invalid email, password, or account type.</div>'; return;
-  }
+  // Admin and seller must authenticate through Supabase so Storage uploads are authorized.
   const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
   if(error || !data.user){
     $('login-error').innerHTML='<div class="auth-error">Invalid email or password.</div>'; return;
@@ -291,8 +282,9 @@ async function loginAccount(e){
   localStorage.setItem('folkmade_current_user',JSON.stringify(currentUser));
   await loadWishlist();
   $('authModal').classList.add('hidden');
-  state.view=role==='seller'?'seller':'shop';
-  render(); toast(role==='seller'?'Seller login successful!':'Login successful!');
+  state.view=role==='admin'?'admin':(role==='seller'?'seller':'shop');
+  if(role==='admin') await loadAdminOrders();
+  render(); toast(role==='admin'?'Welcome Admin!':(role==='seller'?'Seller login successful!':'Login successful!'));
 }
 async function registerAccount(e){
   e.preventDefault();
@@ -319,37 +311,43 @@ async function registerAccount(e){
   }
 }
 async function logoutAccount(){
-  if(currentUser && currentUser.role!=='admin') await supabaseClient.auth.signOut();
+  await supabaseClient.auth.signOut();
   currentUser=null; localStorage.removeItem('folkmade_current_user'); state.wishlist=[]; state.view='shop'; render(); toast('Logged out successfully.');
 }
 
-function renderAccountButton(){
-  const btn=$('accountBtn');
-  const dashboardBtn=$('dashboardBtn');
-  const addProductBtn=$('addProductBtn');
-  if(btn){
-    if(currentUser){btn.textContent=`👤 ${currentUser.name}`;btn.onclick=()=>showProfile();}
-    else{btn.textContent='👤 Login / Register';btn.onclick=openAuth;}
-  }
-  if(dashboardBtn){
-    const isAdmin=!!(currentUser && currentUser.role==='admin');
-    dashboardBtn.style.display=isAdmin?'inline-flex':'none';
-    dashboardBtn.onclick=openDashboard;
-  }
-  if(addProductBtn){
-    const canAdd=!!(currentUser && (currentUser.role==='admin'||currentUser.role==='seller'));
-    addProductBtn.style.display=canAdd?'inline-flex':'none';
-  }
-}
-async function openDashboard(){
+function openDashboard(){
   if(!currentUser){openAuth();return;}
-  if(currentUser.role==='admin'){
-    await loadAdminOrders();
-    showView('admin');
-  }else if(currentUser.role==='seller'){
-    showView('seller');
+  if(String(currentUser.role||'').toLowerCase()==='admin'){loadAdminOrders().then(()=>showView('admin'));return;}
+  if(String(currentUser.role||'').toLowerCase()==='seller'){showView('seller');return;}
+  showProfile();
+}
+function renderAccountButton(){
+  const btn=$('accountBtn'), dash=$('dashboardBtn'), addBtn=$('addProductBtn');
+  if(!btn)return;
+  const role=String(currentUser?.role||'').toLowerCase();
+  const canManageProducts=!!currentUser&&(role==='admin'||role==='seller');
+  if(currentUser){
+    btn.textContent=`👤 ${currentUser.name||'My Account'}`;
+    btn.onclick=()=>showProfile();
   }else{
-    showProfile();
+    btn.textContent='👤 Login / Register';
+    btn.onclick=openAuth;
+  }
+  // Keep both seller/admin actions in sync after every login and render.
+  if(dash){
+    dash.style.display=canManageProducts?'inline-flex':'none';
+    dash.textContent=role==='admin'?'Admin Dashboard':'Seller Dashboard';
+    dash.onclick=openDashboard;
+    dash.disabled=!canManageProducts;
+  }
+  if(addBtn){
+    addBtn.style.display=canManageProducts?'inline-flex':'none';
+    addBtn.onclick=()=>{
+      if(!currentUser){openAuth();return;}
+      if(!['admin','seller'].includes(String(currentUser.role||'').toLowerCase())){toast('Only sellers and admins can add products.');return;}
+      openAdd();
+    };
+    addBtn.disabled=!canManageProducts;
   }
 }
 function showProfile(){$('app').innerHTML=`<div class="container"><div class="section-title"><div><span class="eyebrow" style="color:#166534!important">MY ACCOUNT</span><h2 style="color:#14532d!important">My Profile</h2><p style="color:#292524!important">Your FolkMade account details.</p></div></div><div class="info-card" style="background:#ffffff!important;color:#292524!important"><h3 style="color:#14532d!important">Profile Information</h3><p style="color:#292524!important"><b style="color:#14532d!important">Name:</b> ${currentUser.name}</p><p style="color:#292524!important"><b style="color:#14532d!important">Email:</b> ${currentUser.email}</p><p style="color:#292524!important"><b style="color:#14532d!important">Account Type:</b> ${currentUser.role}</p><button class="primary" onclick="showView('orders')">My Orders</button><button class="profile-btn" onclick="showView('shop')" style="margin-left:10px">Continue Shopping</button><button class="profile-btn" onclick="logoutAccount()" style="margin-left:10px">Logout</button></div></div>`}
@@ -376,10 +374,10 @@ function renderSeller(){
 function render(){
 renderAccountButton();
 
-if(state.view==='admin' && (!currentUser || currentUser.role!=='admin')){
+if(state.view==='admin' && (!currentUser || String(currentUser.role||'').toLowerCase()!=='admin')){
   state.view='shop';
 }
-if(state.view==='seller' && (!currentUser || currentUser.role!=='seller')){
+if(state.view==='seller' && (!currentUser || String(currentUser.role||'').toLowerCase()!=='seller')){
   state.view='shop';
 }
 
@@ -522,7 +520,7 @@ async function uploadProductImage(file){
   });
   if(error){
     if(error.message && /row-level security|permission|not authorized|unauthorized/i.test(error.message)){
-      throw new Error('Photo upload permission denied. Sign in as a registered Seller and check the product-images Storage INSERT policy for authenticated users.');
+      throw new Error('Photo upload permission denied. Sign in through Supabase as a Seller/Admin, then run supabase_setup.sql in the Supabase SQL Editor.');
     }
     throw new Error('Photo upload failed: '+error.message);
   }
@@ -552,17 +550,22 @@ async function saveProduct(e,id){
       imageUrl=await uploadProductImage(selectedFile);
     }
     const dbProduct={
-      title,category,price,original_price:originalPrice,
+      title,category,sub_category:subCategory,price,original_price:originalPrice,
       rating:old?.rating||5,reviews_count:old?.reviewsCount||0,
       created_at:new Date().toISOString(),
       artisan_name:$('f-artisan').value.trim(),
       artisan_region:$('f-region').value.trim(),
-      image:imageUrl
+      image:imageUrl,
+      description:$('f-desc').value.trim(),
+      materials:$('f-materials').value.trim(),
+      in_stock:Math.max(0,Number($('f-stock').value)||0),
+      is_featured:old?.isFeatured||false,
+      is_bestseller:old?.isBestseller||false
     };
     saveButton.textContent='Saving product...';
     let row=null,error=null;
     if(id){
-      const result=await supabaseClient.from('products').update(dbProduct).eq('id',Number(id)).select('*').single();
+      const result=await supabaseClient.from('products').update(dbProduct).eq('id',id).select('*').single();
       row=result.data;error=result.error;
     }else{
       const result=await supabaseClient.from('products').insert([dbProduct]).select('*').single();
@@ -591,7 +594,7 @@ async function saveProduct(e,id){
 }
 async function deleteProduct(id){
   if(!confirm('Are you sure you want to delete this product from the marketplace?'))return;
-  const {error}=await supabaseClient.from('products').delete().eq('id',Number(id));
+  const {error}=await supabaseClient.from('products').delete().eq('id',id);
   if(error){toast('Product could not be deleted from database.');return;}
   delete productMeta[String(id)];saveProductMeta();
   products=products.filter(p=>String(p.id)!==String(id));
