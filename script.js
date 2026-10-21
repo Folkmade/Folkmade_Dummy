@@ -20,6 +20,33 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLI
 const ORDER_ITEMS_CACHE_KEY = 'folkmade_order_items_cache';
 const PRODUCT_META_KEY = 'folkmade_product_meta';
 let currentUser = null;
+// Dynamic artisan data loaded from Supabase
+let artisans = [];
+
+async function loadArtisansFromDatabase() {
+  const { data, error } = await supabaseClient
+    .from('users')
+    .select('id, name, email, phone, role')
+    .eq('role', 'seller')
+    .order('id', { ascending: true });
+
+  if (error) {
+    console.error('ARTISAN LOAD ERROR:', error);
+    artisans = [];
+    return;
+  }
+
+  artisans = (data || []).map(seller => ({
+    id: seller.id,
+    name: seller.name || 'FolkMade Seller',
+    specialty: 'Handmade Products',
+    region: 'India',
+    experience: 'FolkMade Seller',
+    status: 'Registered Seller',
+    bio: 'Registered seller on the FolkMade marketplace.',
+    productsCount: 0
+  }));
+}
 let productMeta = {};
 try { productMeta = JSON.parse(localStorage.getItem(PRODUCT_META_KEY) || '{}'); } catch(e) { productMeta = {}; }
 
@@ -150,6 +177,7 @@ async function initFolkMade(){
       }catch(e){ currentUser=null; }
     }
     await loadProductsFromDatabase();
+    await loadArtisansFromDatabase();
   }catch(e){
     products=[...fallbackProducts];
     
@@ -217,6 +245,8 @@ $('app').innerHTML=`<div class="container">
 <div class="artisan-list">${artisans.map(a=>`<div class="artisan-card"><span class="verified">✓ ${a.status}</span><h3>${a.name}</h3><p><b>${a.specialty}</b></p><p>${a.region} · ${a.experience}</p><p style="color:#78716c;font-size:13px">${a.bio}</p><small>${a.productsCount} products</small></div>`).join('')}</div></div>`
 }
 function renderAdmin(){
+if (!Array.isArray(artisans)) artisans = [];
+if (!Array.isArray(products)) products = [];
 let productRows=products.map(p=>`<tr><td>${p.title}</td><td>${p.category}</td><td>${money(p.price)}</td><td>${p.inStock}</td><td><button class="small-btn" onclick="openEdit('${p.id}')">Edit</button> <button class="small-btn danger" onclick="deleteProduct('${p.id}')">Delete</button></td></tr>`).join('');
 let orderRows=state.orders.map(o=>`<tr><td>${o.id}</td><td>${o.customer}</td><td>${money(o.amount)}</td><td>${o.items}</td><td>${o.status}</td><td>${o.date}</td><td>${o.paymentMethod}</td></tr>`).join('');
 $('app').innerHTML=`<div class="container">
